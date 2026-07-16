@@ -1,4 +1,5 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { __test__ } from "./index.ts";
 
@@ -60,6 +61,15 @@ function createMockMode() {
 		toolOutputExpanded: false,
 	};
 }
+
+describe("tool-group-renderer Pi module resolution", () => {
+	it("resolves interactive modules relative to the active Pi package", () => {
+		const packageDir = join("", "custom", "pi-coding-agent");
+
+		expect(__test__.getPiInteractiveBase(packageDir)).toBe(join(packageDir, "dist", "modes", "interactive"));
+		expect(__test__.getPiInteractiveBase(packageDir)).not.toContain("/usr/local/lib/node_modules");
+	});
+});
 
 describe("tool-group-renderer bash preview", () => {
 	it("renders multiline bash commands as a single inline preview", () => {

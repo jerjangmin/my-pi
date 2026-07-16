@@ -1,11 +1,11 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, getPackageDir } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { join } from "node:path";
 import { truncatePlainToWidth } from "../utils/format-utils.js";
 
 const PATCH_STATE_KEY = Symbol.for("pi.tool-group-renderer.patch-state");
-const PATCH_VERSION = "2026-04-27-r1";
+const PATCH_VERSION = "2026-04-27-r2";
 const GROUP_STATE = Symbol("pi.tool-group-renderer.state");
-const PI_INTERACTIVE_BASE = "/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive";
 const BASH_PREVIEW_LIMIT = 56;
 const MIN_BASH_LINE_WIDTH_WITH_COMMAND = 36;
 const MIN_BASH_COMMAND_PREVIEW_WIDTH = 12;
@@ -155,6 +155,10 @@ type PatchState = {
 };
 
 let runtimeTheme: RuntimeTheme | undefined;
+
+function getPiInteractiveBase(packageDir = getPackageDir()): string {
+	return join(packageDir, "dist", "modes", "interactive");
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
@@ -869,6 +873,7 @@ function renderSessionContextPatched(
 
 export const __test__ = {
 	formatBashCommandPreview,
+	getPiInteractiveBase,
 	formatBashLine,
 	ensureToolHandle,
 	setRuntimeThemeForTest: (theme?: RuntimeTheme) => {
@@ -885,10 +890,11 @@ export default async function toolGroupRenderer(_pi: ExtensionAPI): Promise<void
 	const patchState = globalState[PATCH_STATE_KEY] ?? {};
 	globalState[PATCH_STATE_KEY] = patchState;
 
+	const piInteractiveBase = getPiInteractiveBase();
 	const [{ InteractiveMode }, { ToolExecutionComponent }, themeModule] = await Promise.all([
-		import(`${PI_INTERACTIVE_BASE}/interactive-mode.js`),
-		import(`${PI_INTERACTIVE_BASE}/components/tool-execution.js`),
-		import(`${PI_INTERACTIVE_BASE}/theme/theme.js`),
+		import(`${piInteractiveBase}/interactive-mode.js`),
+		import(`${piInteractiveBase}/components/tool-execution.js`),
+		import(`${piInteractiveBase}/theme/theme.js`),
 	]);
 
 	patchState.toolExecutionComponent = ToolExecutionComponent;
