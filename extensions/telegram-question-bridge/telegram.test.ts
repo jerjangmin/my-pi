@@ -431,7 +431,7 @@ describe("askViaTelegram", () => {
 		).resolves.toEqual({ optional: [] });
 	});
 
-	it("rejects direct radio replies and trims required text replies", async () => {
+	it("ignores replyless radio and checkbox text before valid callbacks", async () => {
 		let radioPoll = 0;
 		const radio = mockTelegram(() => {
 			radioPoll++;
@@ -439,7 +439,7 @@ describe("askViaTelegram", () => {
 			return [
 				{
 					update_id: 2,
-					message: { text: "bypass", from: { id: 20 }, chat: { id: 10 }, reply_to_message: { message_id: 100 } },
+					message: { text: "bypass", from: { id: 20 }, chat: { id: 10 } },
 				},
 				{
 					update_id: 3,
@@ -468,6 +468,31 @@ describe("askViaTelegram", () => {
 			),
 		).resolves.toEqual({ radio: "ok" });
 
+		let checkboxPoll = 0;
+		const checkbox = mockTelegram(() => {
+			checkboxPoll++;
+			if (checkboxPoll === 1) return [];
+			return [
+				{ update_id: 2, message: { text: "bypass", from: { id: 20 }, chat: { id: 10 } } },
+				{
+					update_id: 3,
+					callback_query: {
+						id: "valid",
+						data: callback(checkbox.calls, ":done"),
+						from: { id: 20 },
+						message: { message_id: 100, chat: { id: 10 } },
+					},
+				},
+			];
+		});
+		await expect(
+			askViaTelegram(config, request({ id: "checkbox", type: "checkbox", prompt: "x", allowOther: false }), {
+				fetch: checkbox.fetch as any,
+			}),
+		).resolves.toEqual({ checkbox: [] });
+	});
+
+	it("trims required text replies before accepting them", async () => {
 		let calls: Array<{ method: string; body: Record<string, unknown> }> = [];
 		let textPoll = 0;
 		const text = mockTelegram(() => {

@@ -260,7 +260,12 @@ async function askOne(
 				}
 				const incoming = update.message;
 				if (incoming?.text === "/cancel") return finish(undefined);
-				if (incoming && incoming.reply_to_message?.message_id === replyMessageId && typeof incoming.text === "string") {
+				if (
+					incoming &&
+					replyMessageId !== undefined &&
+					incoming.reply_to_message?.message_id === replyMessageId &&
+					typeof incoming.text === "string"
+				) {
 					const value = incoming.text.trim();
 					if (question.required && !value) {
 						await api(
