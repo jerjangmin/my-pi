@@ -81,10 +81,13 @@ describe("telegram question bridge", () => {
 			vi.fn(async () => {
 				calls++;
 				if (calls <= 3) return new Response(JSON.stringify({ ok: true, result: calls === 1 ? [] : { message_id: 1 } }));
-				await new Promise<void>((resolve) => {
-					release = resolve;
-				});
-				return new Response(JSON.stringify({ ok: true, result: [] }));
+				if (calls === 4) {
+					await new Promise<void>((resolve) => {
+						release = resolve;
+					});
+					return new Response(JSON.stringify({ ok: true, result: [] }));
+				}
+				return new Response(JSON.stringify({ ok: true, result: true }));
 			}),
 		);
 		const r = registry();
