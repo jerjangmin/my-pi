@@ -364,9 +364,17 @@ describe("askViaTelegram", () => {
 		});
 		calls = mock.calls;
 		await expect(
-			askViaTelegram(config, request({ id: "default", type: "radio", prompt: "x", default: "fallback" }), {
-				fetch: mock.fetch as any,
-			}),
+			askViaTelegram(
+				config,
+				request({
+					id: "default",
+					type: "radio",
+					prompt: "x",
+					default: "fallback",
+					options: [{ value: "fallback", label: "Fallback" }],
+				}),
+				{ fetch: mock.fetch as any },
+			),
 		).resolves.toEqual({ default: "fallback" });
 	});
 
@@ -616,6 +624,100 @@ describe("Telegram input boundaries", () => {
 	});
 });
 
+describe("Telegram defaults", () => {
+	it("accepts only option-backed radio defaults", async () => {
+		let poll = 0;
+		const mock = mockTelegram(() => {
+			poll++;
+			if (poll === 1) return [];
+			const option = callback(mock.calls, ":o:0");
+			return [
+				{
+					update_id: poll,
+					callback_query: {
+						id: `${poll}`,
+						data: poll === 2 ? option.replace(":o:0", ":default") : option,
+						from: { id: 20 },
+						message: { message_id: 100, chat: { id: 10 } },
+					},
+				},
+			];
+		});
+		await expect(
+			askViaTelegram(
+				config,
+				request({
+					id: "radio",
+					type: "radio",
+					prompt: "x",
+					default: "missing",
+					options: [{ value: "valid", label: "Valid" }],
+				}),
+				{ fetch: mock.fetch as any },
+			),
+		).resolves.toEqual({ radio: "valid" });
+		expect(JSON.stringify(mock.calls.find((call) => call.method === "sendMessage")?.body.reply_markup)).not.toContain(
+			"default",
+		);
+	});
+
+	it("trims text defaults and ignores blank required defaults", async () => {
+		let validPoll = 0;
+		const valid = mockTelegram(() => {
+			validPoll++;
+			if (validPoll === 1) return [];
+			return [
+				{
+					update_id: 2,
+					callback_query: {
+						id: "default",
+						data: callback(valid.calls, ":default"),
+						from: { id: 20 },
+						message: { message_id: 101, chat: { id: 10 } },
+					},
+				},
+			];
+		});
+		await expect(
+			askViaTelegram(config, request({ id: "text", type: "text", prompt: "x", default: "  fallback  " }), {
+				fetch: valid.fetch as any,
+			}),
+		).resolves.toEqual({ text: "fallback" });
+
+		let blankPoll = 0;
+		const blank = mockTelegram(() => {
+			blankPoll++;
+			if (blankPoll === 1) return [];
+			if (blankPoll === 2) {
+				const cancel = callback(blank.calls, ":cancel");
+				return [
+					{
+						update_id: 2,
+						callback_query: {
+							id: "forged-default",
+							data: cancel.replace(":cancel", ":default"),
+							from: { id: 20 },
+							message: { message_id: 101, chat: { id: 10 } },
+						},
+					},
+				];
+			}
+			return [
+				{
+					update_id: 3,
+					message: { text: "answer", from: { id: 20 }, chat: { id: 10 }, reply_to_message: { message_id: 100 } },
+				},
+			];
+		});
+		await expect(
+			askViaTelegram(config, request({ id: "text", type: "text", prompt: "x", required: true, default: "  " }), {
+				fetch: blank.fetch as any,
+			}),
+		).resolves.toEqual({ text: "answer" });
+		expect(JSON.stringify(blank.calls[2]?.body.reply_markup)).not.toContain("default");
+	});
+});
+
 describe("Telegram message limits and cleanup", () => {
 	it("preserves label and prompt after a long heading", async () => {
 		let poll = 0;
@@ -655,6 +757,44 @@ describe("Telegram message limits and cleanup", () => {
 		expect(text).toContain("PROMPT_MARKER");
 		expect(text).toContain("OPTION_DESCRIPTION_MARKER");
 		expect(text.length).toBeLessThanOrEqual(4096);
+	});
+
+	it("never exceeds the text limit when options exhaust the tail budget", async () => {
+		let poll = 0;
+		const mock = mockTelegram(() => {
+			poll++;
+			if (poll === 1) return [];
+			return [
+				{
+					update_id: 2,
+					callback_query: {
+						id: "ok",
+						data: callback(mock.calls, ":o:0"),
+						from: { id: 20 },
+						message: { message_id: 100, chat: { id: 10 } },
+					},
+				},
+			];
+		});
+		await askViaTelegram(
+			config,
+			{
+				title: "H".repeat(4096),
+				questions: [
+					{
+						id: "x",
+						type: "radio",
+						label: "L".repeat(1024),
+						prompt: "P".repeat(2048),
+						options: [{ value: "v", label: "OPTION_MARKER".padEnd(4096, "O") }],
+					},
+				],
+			},
+			{ fetch: mock.fetch as any },
+		);
+		const text = String(mock.calls.find((call) => call.method === "sendMessage")?.body.text);
+		expect(text).toContain("OPTION_MARKER");
+		expect(text).toHaveLength(4096);
 	});
 
 	it("returns undefined when a long poll is aborted mid-flight", async () => {

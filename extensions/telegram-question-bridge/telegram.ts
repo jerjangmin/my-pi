@@ -40,7 +40,11 @@ function key(text: string, callback_data: string) {
 }
 
 function stringDefault(question: Question): string | undefined {
-	return typeof question.default === "string" ? question.default : undefined;
+	if (typeof question.default !== "string" || question.type === "checkbox") return undefined;
+	const value = question.type === "text" ? question.default.trim() : question.default;
+	return value && (question.type !== "radio" || question.options?.some((option) => option.value === value))
+		? value
+		: undefined;
 }
 
 function keyboard(question: Question, nonce: string, selected = new Set<string>()) {
@@ -69,7 +73,7 @@ function questionText(question: Question, heading: string): string {
 		.join("\n");
 	const tailLimit = MAX_TEXT - required.length - (required ? 2 : 0);
 	const optionText = display(options, tailLimit);
-	const optional = [optionText, display(heading, tailLimit - optionText.length - (optionText ? 2 : 0))]
+	const optional = [optionText, display(heading, Math.max(0, tailLimit - optionText.length - (optionText ? 2 : 0)))]
 		.filter(Boolean)
 		.join("\n\n");
 	return [optional, required].filter(Boolean).join("\n\n");
@@ -220,7 +224,11 @@ async function askOne(
 					await api(fetcher, config, "answerCallbackQuery", { callback_query_id: callback.id }, signal);
 					if (action === "cancel") return finish(undefined);
 					if (action === "skip") return finish(question.type === "checkbox" ? [] : "");
-					if (action === "default") return finish(stringDefault(question));
+					if (action === "default") {
+						const value = stringDefault(question);
+						if (value !== undefined) return finish(value);
+						continue;
+					}
 					if (action === "done") return finish([...selected]);
 					if (action === "other") {
 						await clearKeyboard(fetcher, config, keyboardMessageId);
