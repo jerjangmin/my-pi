@@ -67,10 +67,11 @@ function questionText(question: Question, heading: string): string {
 	const options = (question.options ?? [])
 		.map((option) => `${option.label}${option.description ? ` — ${option.description}` : ""}`)
 		.join("\n");
-	const optional = display(
-		[heading, options].filter(Boolean).join("\n\n"),
-		MAX_TEXT - required.length - (required ? 2 : 0),
-	);
+	const tailLimit = MAX_TEXT - required.length - (required ? 2 : 0);
+	const optionText = display(options, tailLimit);
+	const optional = [optionText, display(heading, tailLimit - optionText.length - (optionText ? 2 : 0))]
+		.filter(Boolean)
+		.join("\n\n");
 	return [optional, required].filter(Boolean).join("\n\n");
 }
 
@@ -268,16 +269,18 @@ async function askOne(
 				) {
 					const value = incoming.text.trim();
 					if (question.required && !value) {
-						await api(
+						const retry = (await api(
 							fetcher,
 							config,
 							"sendMessage",
-							{ chat_id: config.chatId, text: "답변을 입력해 주세요." },
+							{ chat_id: config.chatId, text: "답변을 입력해 주세요.", reply_markup: forceReply(question) },
 							signal,
-						);
+						)) as Message;
+						replyMessageId = retry.message_id;
 						continue;
 					}
-					return finish(question.type === "checkbox" ? [...selected, value] : value);
+					if (question.type === "checkbox") return finish(value ? [...selected, value] : [...selected]);
+					return finish(value);
 				}
 			}
 		}

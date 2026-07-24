@@ -491,8 +491,10 @@ describe("askViaTelegram", () => {
 			}),
 		).resolves.toEqual({ checkbox: [] });
 	});
+});
 
-	it("trims required text replies before accepting them", async () => {
+describe("Telegram input boundaries", () => {
+	it("retries required text replies with ForceReply", async () => {
 		let calls: Array<{ method: string; body: Record<string, unknown> }> = [];
 		let textPoll = 0;
 		const text = mockTelegram(() => {
@@ -505,22 +507,116 @@ describe("askViaTelegram", () => {
 						text: textPoll === 2 ? "   " : "  answer  ",
 						from: { id: 20 },
 						chat: { id: 10 },
-						reply_to_message: { message_id: 100 },
+						reply_to_message: { message_id: textPoll === 2 ? 100 : 102 },
 					},
 				},
 			];
 		});
 		calls = text.calls;
 		await expect(
-			askViaTelegram(config, request({ id: "text", type: "text", prompt: "x", required: true }), {
+			askViaTelegram(config, request({ id: "text", type: "text", prompt: "x", required: true, placeholder: "답변" }), {
 				fetch: text.fetch as any,
 			}),
 		).resolves.toEqual({ text: "answer" });
-		expect(calls.some((call) => call.method === "sendMessage" && call.body.text === "답변을 입력해 주세요.")).toBe(
-			true,
-		);
+		const retry = calls.find((call) => call.method === "sendMessage" && call.body.text === "답변을 입력해 주세요.");
+		expect(retry?.body.reply_markup).toEqual({ force_reply: true, input_field_placeholder: "답변" });
 	});
 
+	it("keeps optional checkbox selections when a custom reply is blank", async () => {
+		let calls: Array<{ method: string; body: Record<string, unknown> }> = [];
+		let poll = 0;
+		const mock = mockTelegram(() => {
+			poll++;
+			if (poll === 1) return [];
+			if (poll === 2)
+				return [
+					{
+						update_id: 2,
+						callback_query: {
+							id: "option",
+							data: callback(calls, ":o:0"),
+							from: { id: 20 },
+							message: { message_id: 100, chat: { id: 10 } },
+						},
+					},
+				];
+			if (poll === 3)
+				return [
+					{
+						update_id: 3,
+						callback_query: {
+							id: "other",
+							data: callback(calls, ":other"),
+							from: { id: 20 },
+							message: { message_id: 100, chat: { id: 10 } },
+						},
+					},
+				];
+			return [
+				{
+					update_id: 4,
+					message: { text: "  ", from: { id: 20 }, chat: { id: 10 }, reply_to_message: { message_id: 101 } },
+				},
+			];
+		});
+		calls = mock.calls;
+		await expect(
+			askViaTelegram(
+				config,
+				request({
+					id: "checkbox",
+					type: "checkbox",
+					prompt: "x",
+					allowOther: true,
+					options: [{ value: "selected", label: "Selected" }],
+				}),
+				{ fetch: mock.fetch as any },
+			),
+		).resolves.toEqual({ checkbox: ["selected"] });
+	});
+
+	it("retries required other replies with ForceReply", async () => {
+		let calls: Array<{ method: string; body: Record<string, unknown> }> = [];
+		let poll = 0;
+		const mock = mockTelegram(() => {
+			poll++;
+			if (poll === 1) return [];
+			if (poll === 2)
+				return [
+					{
+						update_id: 2,
+						callback_query: {
+							id: "other",
+							data: callback(calls, ":other"),
+							from: { id: 20 },
+							message: { message_id: 100, chat: { id: 10 } },
+						},
+					},
+				];
+			return [
+				{
+					update_id: poll,
+					message: {
+						text: poll === 3 ? " " : "other",
+						from: { id: 20 },
+						chat: { id: 10 },
+						reply_to_message: { message_id: poll === 3 ? 101 : 102 },
+					},
+				},
+			];
+		});
+		calls = mock.calls;
+		await expect(
+			askViaTelegram(config, request({ id: "radio", type: "radio", prompt: "x", allowOther: true, required: true }), {
+				fetch: mock.fetch as any,
+			}),
+		).resolves.toEqual({ radio: "other" });
+		const retry = calls.find((call) => call.method === "sendMessage" && call.body.text === "답변을 입력해 주세요.");
+		expect(retry?.body.reply_markup).toEqual({ force_reply: true });
+	});
+});
+
+describe("Telegram message limits and cleanup", () => {
 	it("preserves label and prompt after a long heading", async () => {
 		let poll = 0;
 		const mock = mockTelegram(() => {
@@ -548,7 +644,7 @@ describe("askViaTelegram", () => {
 						type: "radio",
 						label: "LABEL_MARKER",
 						prompt: "PROMPT_MARKER",
-						options: [{ value: "v", label: "V" }],
+						options: [{ value: "v", label: "V", description: "OPTION_DESCRIPTION_MARKER" }],
 					},
 				],
 			},
@@ -557,6 +653,7 @@ describe("askViaTelegram", () => {
 		const text = String(mock.calls.find((call) => call.method === "sendMessage")?.body.text);
 		expect(text).toContain("LABEL_MARKER");
 		expect(text).toContain("PROMPT_MARKER");
+		expect(text).toContain("OPTION_DESCRIPTION_MARKER");
 		expect(text.length).toBeLessThanOrEqual(4096);
 	});
 
