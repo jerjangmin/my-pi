@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+	DEFAULT_MAX_FRAME_BYTES,
+	FrameTooLargeError,
 	PROTOCOL_VERSION,
 	createFrameDecoder,
 	encodeFrame,
@@ -51,6 +53,23 @@ describe("telegram question bridge protocol", () => {
 		expect(decoder.push(`${frame.slice(10)}\n\r\n`)).toEqual([{ type: "accepted", requestId: "request-1" }]);
 	});
 
+	it("rejects frames above the UTF-8 byte limit without losing frame boundaries", () => {
+		const decoder = createFrameDecoder(parseBrokerMessage, 4);
+		expect(() => decoder.push('{"x":')).toThrow(FrameTooLargeError);
+
+		const utf8Decoder = createFrameDecoder(parseBrokerMessage, 6);
+		expect(utf8Decoder.push("한")).toEqual([]);
+		expect(() => utf8Decoder.push("글한")).toThrow(FrameTooLargeError);
+
+		const multiFrameDecoder = createFrameDecoder(parseBrokerMessage, 20);
+		expect(multiFrameDecoder.push('{"type":"pong"}\n')).toEqual([{ type: "pong" }]);
+		expect(() => multiFrameDecoder.push(`${"x".repeat(21)}\n`)).toThrow(FrameTooLargeError);
+		expect(() => createFrameDecoder(parseBrokerMessage, 0)).toThrow(RangeError);
+		expect(() => createFrameDecoder(parseBrokerMessage, 1.5)).toThrow(RangeError);
+		expect(() => createFrameDecoder(parseBrokerMessage, Number.POSITIVE_INFINITY)).toThrow(RangeError);
+		expect(DEFAULT_MAX_FRAME_BYTES).toBe(256 * 1024);
+	});
+
 	it("rejects malformed JSON and messages that do not satisfy the protocol", () => {
 		const decoder = createFrameDecoder(parseClientMessage);
 		expect(decoder.push('{"type":"ping"}\nnot-json\n')).toEqual([]);
@@ -81,6 +100,10 @@ describe("telegram question bridge protocol", () => {
 
 	it("validates questions and answer values from untrusted input", () => {
 		expect(parseClientMessage(ask)).toEqual(ask);
+		expect(parseClientMessage({ ...ask, request: { questions: [] } })).toBeUndefined();
+		expect(
+			parseClientMessage({ ...ask, request: { questions: [question, { ...question, prompt: "Duplicate" }] } }),
+		).toBeUndefined();
 		expect(parseClientMessage({ ...ask, request: { questions: [{ ...question, type: "invalid" }] } })).toBeUndefined();
 		expect(
 			parseBrokerMessage({ type: "answer", requestId: "request-1", values: { color: ["blue", "green"] } }),
@@ -113,6 +136,9 @@ describe("telegram question bridge protocol", () => {
 			code: "unavailable",
 			message: "Broker unavailable",
 		});
+		expect(
+			parseBrokerMessage({ type: "error", requestId: "", code: "unavailable", message: "Broker unavailable" }),
+		).toBeUndefined();
 		expect(parseBrokerMessage({ type: "pong" })).toEqual({ type: "pong" });
 	});
 });

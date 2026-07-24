@@ -15,6 +15,7 @@ export type QuestionAction =
 	| { type: "toggle-checkbox"; value: string }
 	| { type: "submit-checkbox" }
 	| { type: "submit-text"; value: string }
+	| { type: "submit-default" }
 	| { type: "skip" }
 	| { type: "cancel" }
 	| { type: "expire" };
@@ -32,13 +33,50 @@ function cloneQuestion(question: NormalizedQuestion): NormalizedQuestion {
 	};
 }
 
+function defaultForQuestion(question: NormalizedQuestion): AnswerValue | undefined {
+	if (question.type === "checkbox" && Array.isArray(question.default)) {
+		return [...new Set(question.default)];
+	}
+	if (question.type === "text" && typeof question.default === "string") return question.default;
+	if (
+		question.type === "radio" &&
+		typeof question.default === "string" &&
+		question.options?.some((option) => option.value === question.default)
+	) {
+		return question.default;
+	}
+	return undefined;
+}
+
+function initialAnswers(questions: NormalizedQuestion[]): Record<string, AnswerValue> {
+	const answers: Record<string, AnswerValue> = {};
+	for (const question of questions) {
+		const defaultValue = defaultForQuestion(question);
+		if (defaultValue !== undefined)
+			answers[question.id] = Array.isArray(defaultValue) ? [...defaultValue] : defaultValue;
+	}
+	return answers;
+}
+
+function checkboxValuesFor(
+	questions: NormalizedQuestion[],
+	currentQuestionIndex: number,
+	answers: Record<string, AnswerValue>,
+): string[] {
+	const question = questions[currentQuestionIndex];
+	const answer = question?.type === "checkbox" ? answers[question.id] : undefined;
+	return Array.isArray(answer) ? [...answer] : [];
+}
+
 export function createQuestionState(request: QuestionRequest): QuestionState {
+	const questions = request.questions.map(cloneQuestion);
+	const answers = initialAnswers(questions);
 	return {
-		status: request.questions.length === 0 ? "answered" : "active",
-		questions: request.questions.map(cloneQuestion),
+		status: questions.length === 0 ? "answered" : "active",
+		questions,
 		currentQuestionIndex: 0,
-		answers: {},
-		checkboxValues: [],
+		answers,
+		checkboxValues: checkboxValuesFor(questions, 0, answers),
 	};
 }
 
@@ -53,7 +91,7 @@ function completeOrAdvance(state: QuestionState, answers: Record<string, AnswerV
 		status: currentQuestionIndex === state.questions.length ? "answered" : "active",
 		currentQuestionIndex,
 		answers,
-		checkboxValues: [],
+		checkboxValues: checkboxValuesFor(state.questions, currentQuestionIndex, answers),
 	};
 }
 
@@ -61,6 +99,18 @@ function answerCurrent(state: QuestionState, value: AnswerValue): QuestionState 
 	const question = state.questions[state.currentQuestionIndex];
 	if (!question) return state;
 	return completeOrAdvance(state, { ...state.answers, [question.id]: Array.isArray(value) ? [...value] : value });
+}
+
+function submitDefault(state: QuestionState, question: NormalizedQuestion): QuestionTransition {
+	const defaultValue = defaultForQuestion(question);
+	if (defaultValue === undefined) return { state, error: "No valid default" };
+	if (
+		question.required &&
+		(typeof defaultValue === "string" ? defaultValue.trim().length === 0 : defaultValue.length === 0)
+	) {
+		return { state, error: "Question is required" };
+	}
+	return { state: answerCurrent(state, defaultValue) };
 }
 
 export function transitionQuestionState(state: QuestionState, action: QuestionAction): QuestionTransition {
@@ -77,6 +127,7 @@ export function transitionQuestionState(state: QuestionState, action: QuestionAc
 			? { state, error: "Question is required" }
 			: { state: completeOrAdvance(state, state.answers) };
 	}
+	if (action.type === "submit-default") return submitDefault(state, question);
 
 	switch (action.type) {
 		case "select-radio":
@@ -96,7 +147,7 @@ export function transitionQuestionState(state: QuestionState, action: QuestionAc
 			return { state: answerCurrent(state, state.checkboxValues) };
 		case "submit-text":
 			if (question.type !== "text") return { state, error: "Active question is not text" };
-			if (question.required && action.value.length === 0) return { state, error: "Question is required" };
+			if (question.required && action.value.trim().length === 0) return { state, error: "Question is required" };
 			return { state: answerCurrent(state, action.value) };
 	}
 }

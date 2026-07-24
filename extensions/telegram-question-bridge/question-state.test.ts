@@ -79,6 +79,78 @@ describe("question state", () => {
 		});
 	});
 
+	it("applies source-form defaults and submits each valid current default", () => {
+		const defaults: QuestionRequest = {
+			questions: [
+				{ id: "radio", type: "radio", prompt: "Pick", options: [{ value: "a", label: "A" }], default: "a" },
+				{ id: "check", type: "checkbox", prompt: "Pick many", default: ["a", "a", "custom"] },
+				{ id: "text", type: "text", prompt: "Explain", default: " raw text " },
+			],
+		};
+		let state = createQuestionState(defaults);
+		expect(state.answers).toEqual({ radio: "a", check: ["a", "custom"], text: " raw text " });
+		expect(state.checkboxValues).toEqual([]);
+
+		state = transitionQuestionState(state, { type: "submit-default" }).state;
+		expect(state).toMatchObject({
+			currentQuestionIndex: 1,
+			answers: { radio: "a", check: ["a", "custom"] },
+			checkboxValues: ["a", "custom"],
+		});
+		state = transitionQuestionState(state, { type: "submit-default" }).state;
+		expect(state).toMatchObject({ currentQuestionIndex: 2, checkboxValues: [] });
+		state = transitionQuestionState(state, { type: "submit-default" }).state;
+		expect(state).toMatchObject({
+			status: "answered",
+			answers: { radio: "a", check: ["a", "custom"], text: " raw text " },
+		});
+	});
+
+	it("rejects invalid defaults, required empty defaults, and whitespace-only required text", () => {
+		const invalidRadio = createQuestionState({
+			questions: [
+				{ id: "radio", type: "radio", prompt: "Pick", options: [{ value: "a", label: "A" }], default: "missing" },
+			],
+		});
+		expect(transitionQuestionState(invalidRadio, { type: "submit-default" })).toEqual({
+			state: invalidRadio,
+			error: "No valid default",
+		});
+
+		const mismatchedDefault = createQuestionState({
+			questions: [{ id: "text", type: "text", prompt: "Explain", default: ["not text"] }],
+		});
+		expect(transitionQuestionState(mismatchedDefault, { type: "submit-default" })).toEqual({
+			state: mismatchedDefault,
+			error: "No valid default",
+		});
+
+		const requiredText = createQuestionState({
+			questions: [{ id: "text", type: "text", prompt: "Explain", required: true, default: " " }],
+		});
+		expect(transitionQuestionState(requiredText, { type: "submit-default" })).toEqual({
+			state: requiredText,
+			error: "Question is required",
+		});
+		expect(
+			transitionQuestionState(requiredText, { type: "submit-text", value: "  raw value  " }).state.answers,
+		).toEqual({ text: "  raw value  " });
+		expect(transitionQuestionState(requiredText, { type: "submit-text", value: " \t " })).toEqual({
+			state: requiredText,
+			error: "Question is required",
+		});
+	});
+
+	it("preserves optional defaults when the current question is skipped", () => {
+		const state = createQuestionState({
+			questions: [{ id: "text", type: "text", prompt: "Optional", required: false, default: "seed" }],
+		});
+		expect(transitionQuestionState(state, { type: "skip" }).state).toMatchObject({
+			status: "answered",
+			answers: { text: "seed" },
+		});
+	});
+
 	it("allows cancelling and expiring from active state", () => {
 		expect(transitionQuestionState(createQuestionState(request), { type: "cancel" }).state.status).toBe("cancelled");
 		expect(transitionQuestionState(createQuestionState(request), { type: "expire" }).state.status).toBe("expired");

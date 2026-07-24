@@ -1,4 +1,12 @@
 export const PROTOCOL_VERSION = 1 as const;
+export const DEFAULT_MAX_FRAME_BYTES = 256 * 1024;
+
+export class FrameTooLargeError extends Error {
+	constructor(readonly maxFrameBytes: number) {
+		super(`NDJSON frame exceeds ${maxFrameBytes} UTF-8 bytes`);
+		this.name = "FrameTooLargeError";
+	}
+}
 
 export type AnswerValue = string | string[];
 export type QuestionType = "radio" | "checkbox" | "text";
@@ -101,13 +109,23 @@ function isNormalizedQuestion(value: unknown): value is NormalizedQuestion {
 }
 
 function isQuestionRequest(value: unknown): value is QuestionRequest {
-	return (
-		isRecord(value) &&
-		isOptionalString(value.title) &&
-		isOptionalString(value.description) &&
-		Array.isArray(value.questions) &&
-		value.questions.every(isNormalizedQuestion)
-	);
+	if (
+		!isRecord(value) ||
+		!isOptionalString(value.title) ||
+		!isOptionalString(value.description) ||
+		!Array.isArray(value.questions) ||
+		value.questions.length === 0 ||
+		!value.questions.every(isNormalizedQuestion)
+	) {
+		return false;
+	}
+
+	const ids = new Set<string>();
+	for (const question of value.questions) {
+		if (ids.has(question.id)) return false;
+		ids.add(question.id);
+	}
+	return true;
 }
 
 function hasProtocolVersion(
@@ -158,7 +176,9 @@ export function parseBrokerMessage(value: unknown): BrokerMessage | undefined {
 		case "cancelled":
 			return isNonEmptyString(value.requestId) && isOptionalString(value.reason) ? (value as BrokerMessage) : undefined;
 		case "error":
-			return isOptionalString(value.requestId) && isNonEmptyString(value.code) && isNonEmptyString(value.message)
+			return (value.requestId === undefined || isNonEmptyString(value.requestId)) &&
+				isNonEmptyString(value.code) &&
+				isNonEmptyString(value.message)
 				? (value as BrokerMessage)
 				: undefined;
 		case "pong":
@@ -176,18 +196,32 @@ export interface FrameDecoder<T> {
 	push(chunk: string | Uint8Array): T[];
 }
 
-export function createFrameDecoder<T>(parse: (value: unknown) => T | undefined): FrameDecoder<T> {
+export function createFrameDecoder<T>(
+	parse: (value: unknown) => T | undefined,
+	maxFrameBytes = DEFAULT_MAX_FRAME_BYTES,
+): FrameDecoder<T> {
+	if (!Number.isFinite(maxFrameBytes) || !Number.isInteger(maxFrameBytes) || maxFrameBytes <= 0) {
+		throw new RangeError("maxFrameBytes must be a positive finite integer");
+	}
+
 	let remainder = "";
 	const decoder = new TextDecoder();
+	const encoder = new TextEncoder();
+
+	function assertFrameSize(frame: string): void {
+		if (encoder.encode(frame).byteLength > maxFrameBytes) throw new FrameTooLargeError(maxFrameBytes);
+	}
 
 	return {
 		push(chunk) {
 			remainder += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
 			const lines = remainder.split("\n");
 			remainder = lines.pop() ?? "";
+			assertFrameSize(remainder);
 			const messages: T[] = [];
 
 			for (const line of lines) {
+				assertFrameSize(line);
 				const trimmed = line.trim();
 				if (!trimmed) continue;
 				try {
