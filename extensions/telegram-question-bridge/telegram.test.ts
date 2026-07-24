@@ -161,6 +161,14 @@ describe("askViaTelegram", () => {
 		await expect(askViaTelegram(config, request(radio), { fetch: mock.fetch as any })).resolves.toEqual({
 			r: "custom",
 		});
+		expect(
+			calls.some(
+				(call) =>
+					call.method === "editMessageReplyMarkup" &&
+					call.body.message_id === 100 &&
+					JSON.stringify(call.body.reply_markup) === "{}",
+			),
+		).toBe(true);
 		const controller = new AbortController();
 		controller.abort();
 		await expect(
@@ -257,7 +265,10 @@ describe("askViaTelegram", () => {
 				fetch: mock.fetch as any,
 			}),
 		).resolves.toEqual({ x: "v" });
-		expect(calls.filter((call) => call.method === "answerCallbackQuery")).toHaveLength(1);
+		expect(calls.filter((call) => call.method === "answerCallbackQuery")).toHaveLength(2);
+		expect(calls.some((call) => call.method === "answerCallbackQuery" && call.body.text === "만료된 질문입니다.")).toBe(
+			true,
+		);
 		expect(
 			calls.some((call) => call.method === "editMessageReplyMarkup" && JSON.stringify(call.body.reply_markup) === "{}"),
 		).toBe(true);

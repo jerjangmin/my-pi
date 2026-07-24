@@ -165,6 +165,7 @@ async function askOne(
 		signal,
 	)) as Message;
 	let replyMessageId = message.message_id;
+	let keyboardMessageId = message.message_id;
 	let callbackMessageId = message.message_id;
 	if (question.type === "text") {
 		const controls = (await api(
@@ -178,11 +179,12 @@ async function askOne(
 			},
 			signal,
 		)) as Message;
+		keyboardMessageId = controls.message_id;
 		callbackMessageId = controls.message_id;
 	}
 	let nextOffset = offset;
 	const finish = async (value: unknown): Promise<Answer> => {
-		await clearKeyboard(fetcher, config, callbackMessageId, signal);
+		await clearKeyboard(fetcher, config, keyboardMessageId, signal);
 		return { value, offset: nextOffset };
 	};
 
@@ -194,7 +196,16 @@ async function askOne(
 			const callback = update.callback_query;
 			if (callback) {
 				const action = callback.data?.startsWith(`${nonce}:`) ? callback.data.slice(nonce.length + 1) : "";
-				if (callback.message?.message_id !== callbackMessageId || !action) continue;
+				if (callback.message?.message_id !== callbackMessageId || !action) {
+					await api(
+						fetcher,
+						config,
+						"answerCallbackQuery",
+						{ callback_query_id: callback.id, text: "만료된 질문입니다." },
+						signal,
+					);
+					continue;
+				}
 				if (action === "done" && question.type === "checkbox" && question.required && selected.size === 0) {
 					await api(
 						fetcher,
@@ -211,6 +222,7 @@ async function askOne(
 				if (action === "default") return finish(stringDefault(question));
 				if (action === "done") return finish([...selected]);
 				if (action === "other") {
+					await clearKeyboard(fetcher, config, keyboardMessageId, signal);
 					const custom = (await api(
 						fetcher,
 						config,
