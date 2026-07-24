@@ -48,12 +48,37 @@ function defaultForQuestion(question: NormalizedQuestion): AnswerValue | undefin
 	return undefined;
 }
 
+function cloneAnswerValue(value: AnswerValue): AnswerValue {
+	return Array.isArray(value) ? [...value] : value;
+}
+
+function defineAnswer(answers: Record<string, AnswerValue>, id: string, value: AnswerValue): void {
+	Object.defineProperty(answers, id, {
+		value: cloneAnswerValue(value),
+		enumerable: true,
+		writable: true,
+		configurable: true,
+	});
+}
+
+function createAnswerMap(entries?: Record<string, AnswerValue>): Record<string, AnswerValue> {
+	const answers = Object.create(null) as Record<string, AnswerValue>;
+	if (!entries) return answers;
+	for (const [id, value] of Object.entries(entries)) defineAnswer(answers, id, value);
+	return answers;
+}
+
+function withAnswer(answers: Record<string, AnswerValue>, id: string, value: AnswerValue): Record<string, AnswerValue> {
+	const next = createAnswerMap(answers);
+	defineAnswer(next, id, value);
+	return next;
+}
+
 function initialAnswers(questions: NormalizedQuestion[]): Record<string, AnswerValue> {
-	const answers: Record<string, AnswerValue> = {};
+	const answers = createAnswerMap();
 	for (const question of questions) {
 		const defaultValue = defaultForQuestion(question);
-		if (defaultValue !== undefined)
-			answers[question.id] = Array.isArray(defaultValue) ? [...defaultValue] : defaultValue;
+		if (defaultValue !== undefined) defineAnswer(answers, question.id, defaultValue);
 	}
 	return answers;
 }
@@ -98,7 +123,7 @@ function completeOrAdvance(state: QuestionState, answers: Record<string, AnswerV
 function answerCurrent(state: QuestionState, value: AnswerValue): QuestionState {
 	const question = state.questions[state.currentQuestionIndex];
 	if (!question) return state;
-	return completeOrAdvance(state, { ...state.answers, [question.id]: Array.isArray(value) ? [...value] : value });
+	return completeOrAdvance(state, withAnswer(state.answers, question.id, value));
 }
 
 function submitDefault(state: QuestionState, question: NormalizedQuestion): QuestionTransition {

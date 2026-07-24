@@ -204,33 +204,58 @@ export function createFrameDecoder<T>(
 		throw new RangeError("maxFrameBytes must be a positive finite integer");
 	}
 
-	let remainder = "";
+	let remainderParts: string[] = [];
+	let remainderBytes = 0;
 	const decoder = new TextDecoder();
 	const encoder = new TextEncoder();
 
-	function assertFrameSize(frame: string): void {
-		if (encoder.encode(frame).byteLength > maxFrameBytes) throw new FrameTooLargeError(maxFrameBytes);
+	function byteLength(segment: string): number {
+		return encoder.encode(segment).byteLength;
+	}
+
+	function appendRemainder(segment: string, segmentBytes: number): void {
+		if (remainderBytes + segmentBytes > maxFrameBytes) throw new FrameTooLargeError(maxFrameBytes);
+		remainderParts.push(segment);
+		remainderBytes += segmentBytes;
+	}
+
+	function takeRemainder(): string {
+		const frame = remainderParts.join("");
+		remainderParts = [];
+		remainderBytes = 0;
+		return frame;
+	}
+
+	function parseFrame(frame: string, messages: T[]): void {
+		const trimmed = frame.trim();
+		if (!trimmed) return;
+		try {
+			const message = parse(JSON.parse(trimmed));
+			if (message !== undefined) messages.push(message);
+		} catch {
+			// Invalid frames are untrusted input and are ignored.
+		}
 	}
 
 	return {
 		push(chunk) {
-			remainder += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
-			const lines = remainder.split("\n");
-			remainder = lines.pop() ?? "";
-			assertFrameSize(remainder);
+			const decoded = typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+			const segments = decoded.split("\n");
 			const messages: T[] = [];
 
-			for (const line of lines) {
-				assertFrameSize(line);
-				const trimmed = line.trim();
-				if (!trimmed) continue;
-				try {
-					const message = parse(JSON.parse(trimmed));
-					if (message !== undefined) messages.push(message);
-				} catch {
-					// Invalid frames are untrusted input and are ignored.
-				}
+			appendRemainder(segments[0] ?? "", byteLength(segments[0] ?? ""));
+			if (segments.length === 1) return messages;
+
+			parseFrame(takeRemainder(), messages);
+
+			for (let index = 1; index < segments.length - 1; index += 1) {
+				const frame = segments[index] ?? "";
+				if (byteLength(frame) > maxFrameBytes) throw new FrameTooLargeError(maxFrameBytes);
+				parseFrame(frame, messages);
 			}
+
+			const finalSegment = segments.at(-1) ?? "";
+			appendRemainder(finalSegment, byteLength(finalSegment));
 			return messages;
 		},
 	};

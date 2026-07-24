@@ -61,8 +61,15 @@ describe("telegram question bridge protocol", () => {
 		expect(utf8Decoder.push("한")).toEqual([]);
 		expect(() => utf8Decoder.push("글한")).toThrow(FrameTooLargeError);
 
+		const exactFrame = '{"type":"pong"}';
+		const exactBoundaryDecoder = createFrameDecoder(
+			parseBrokerMessage,
+			new TextEncoder().encode(exactFrame).byteLength,
+		);
+		expect(exactBoundaryDecoder.push(`${exactFrame}\n`)).toEqual([{ type: "pong" }]);
+
 		const multiFrameDecoder = createFrameDecoder(parseBrokerMessage, 20);
-		expect(multiFrameDecoder.push('{"type":"pong"}\n')).toEqual([{ type: "pong" }]);
+		expect(multiFrameDecoder.push(`${exactFrame}\n`)).toEqual([{ type: "pong" }]);
 		expect(() => multiFrameDecoder.push(`${"x".repeat(21)}\n`)).toThrow(FrameTooLargeError);
 		expect(() => createFrameDecoder(parseBrokerMessage, 0)).toThrow(RangeError);
 		expect(() => createFrameDecoder(parseBrokerMessage, 1.5)).toThrow(RangeError);

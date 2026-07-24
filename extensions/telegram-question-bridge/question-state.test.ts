@@ -151,6 +151,27 @@ describe("question state", () => {
 		});
 	});
 
+	it("serializes prototype-like question IDs as own answer keys", () => {
+		let state = createQuestionState({
+			questions: [
+				{ id: "__proto__", type: "text", prompt: "Proto", required: false, default: "seed" },
+				{ id: "constructor", type: "checkbox", prompt: "Constructor", required: false, default: ["selected"] },
+				{ id: "prototype", type: "text", prompt: "Prototype", required: false },
+			],
+		});
+		expect(Object.getPrototypeOf(state.answers)).toBeNull();
+		expect(JSON.stringify(state.answers)).toBe('{"__proto__":"seed","constructor":["selected"]}');
+
+		state = transitionQuestionState(state, { type: "submit-default" }).state;
+		state = transitionQuestionState(state, { type: "skip" }).state;
+		state = transitionQuestionState(state, { type: "submit-text", value: "saved" }).state;
+		expect(Object.getPrototypeOf(state.answers)).toBeNull();
+		expect(Object.hasOwn(state.answers, "__proto__")).toBe(true);
+		expect(Object.hasOwn(state.answers, "constructor")).toBe(true);
+		expect(Object.hasOwn(state.answers, "prototype")).toBe(true);
+		expect(JSON.stringify(state.answers)).toBe('{"__proto__":"seed","constructor":["selected"],"prototype":"saved"}');
+	});
+
 	it("allows cancelling and expiring from active state", () => {
 		expect(transitionQuestionState(createQuestionState(request), { type: "cancel" }).state.status).toBe("cancelled");
 		expect(transitionQuestionState(createQuestionState(request), { type: "expire" }).state.status).toBe("expired");
