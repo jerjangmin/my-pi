@@ -87,6 +87,16 @@ PATH="/opt/homebrew/bin:$PATH" pnpm exec biome check telegram-question-bridge
 - 새 token을 기존 `0600` 설정 파일에 저장
 - 로그·테스트 fixture에 실제 token 금지
 
+## 검토 결과
+
+- 전체 자동 검증: 30개 파일, 453개 테스트 통과
+- 타입체크·Biome·격리 headless 로드 통과
+- 설치된 `ask-user-question@0.4.5`와 동시 로드 통과
+- production 코드: `index.ts` 119줄 + `telegram.ts` 331줄 = 450줄
+- broker, launchd, Unix socket, IPC 의존 없음
+- 새 봇 token 재발급·설정 완료
+- 실제 Telegram 왕복 통과: radio, checkbox, text, cancel
+
 ## 롤백
 
 - `/question-channel local`로 즉시 로컬 폼 복귀
