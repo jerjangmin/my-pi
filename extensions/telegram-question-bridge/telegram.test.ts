@@ -431,13 +431,120 @@ describe("askViaTelegram", () => {
 		).resolves.toEqual({ optional: [] });
 	});
 
+	it("rejects direct radio replies and trims required text replies", async () => {
+		let radioPoll = 0;
+		const radio = mockTelegram(() => {
+			radioPoll++;
+			if (radioPoll === 1) return [];
+			return [
+				{
+					update_id: 2,
+					message: { text: "bypass", from: { id: 20 }, chat: { id: 10 }, reply_to_message: { message_id: 100 } },
+				},
+				{
+					update_id: 3,
+					callback_query: {
+						id: "valid",
+						data: callback(radio.calls, ":o:0"),
+						from: { id: 20 },
+						message: { message_id: 100, chat: { id: 10 } },
+					},
+				},
+			];
+		});
+		await expect(
+			askViaTelegram(
+				config,
+				request({
+					id: "radio",
+					type: "radio",
+					prompt: "x",
+					allowOther: false,
+					options: [{ value: "ok", label: "OK" }],
+				}),
+				{
+					fetch: radio.fetch as any,
+				},
+			),
+		).resolves.toEqual({ radio: "ok" });
+
+		let calls: Array<{ method: string; body: Record<string, unknown> }> = [];
+		let textPoll = 0;
+		const text = mockTelegram(() => {
+			textPoll++;
+			if (textPoll === 1) return [];
+			return [
+				{
+					update_id: textPoll,
+					message: {
+						text: textPoll === 2 ? "   " : "  answer  ",
+						from: { id: 20 },
+						chat: { id: 10 },
+						reply_to_message: { message_id: 100 },
+					},
+				},
+			];
+		});
+		calls = text.calls;
+		await expect(
+			askViaTelegram(config, request({ id: "text", type: "text", prompt: "x", required: true }), {
+				fetch: text.fetch as any,
+			}),
+		).resolves.toEqual({ text: "answer" });
+		expect(calls.some((call) => call.method === "sendMessage" && call.body.text === "답변을 입력해 주세요.")).toBe(
+			true,
+		);
+	});
+
+	it("preserves label and prompt after a long heading", async () => {
+		let poll = 0;
+		const mock = mockTelegram(() => {
+			poll++;
+			if (poll === 1) return [];
+			return [
+				{
+					update_id: 2,
+					callback_query: {
+						id: "ok",
+						data: callback(mock.calls, ":o:0"),
+						from: { id: 20 },
+						message: { message_id: 100, chat: { id: 10 } },
+					},
+				},
+			];
+		});
+		await askViaTelegram(
+			config,
+			{
+				title: "H".repeat(4096),
+				questions: [
+					{
+						id: "x",
+						type: "radio",
+						label: "LABEL_MARKER",
+						prompt: "PROMPT_MARKER",
+						options: [{ value: "v", label: "V" }],
+					},
+				],
+			},
+			{ fetch: mock.fetch as any },
+		);
+		const text = String(mock.calls.find((call) => call.method === "sendMessage")?.body.text);
+		expect(text).toContain("LABEL_MARKER");
+		expect(text).toContain("PROMPT_MARKER");
+		expect(text.length).toBeLessThanOrEqual(4096);
+	});
+
 	it("returns undefined when a long poll is aborted mid-flight", async () => {
 		const controller = new AbortController();
 		let calls = 0;
-		const fetch = vi.fn((_url: string, init?: RequestInit) => {
+		const methods: string[] = [];
+		const fetch = vi.fn((url: string, init?: RequestInit) => {
 			calls++;
+			methods.push(url.split("/").pop() ?? "");
 			if (calls === 1) return Promise.resolve(response([]));
 			if (calls === 2) return Promise.resolve(response({ message_id: 100 }));
+			if (calls === 4) return Promise.resolve(response(true));
 			return new Promise<Response>((_resolve, reject) =>
 				init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError"))),
 			);
@@ -449,5 +556,6 @@ describe("askViaTelegram", () => {
 		await vi.waitFor(() => expect(calls).toBe(3));
 		controller.abort();
 		await expect(pending).resolves.toBeUndefined();
+		expect(methods).toContain("editMessageReplyMarkup");
 	});
 });

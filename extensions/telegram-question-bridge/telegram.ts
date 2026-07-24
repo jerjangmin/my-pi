@@ -61,10 +61,17 @@ function keyboard(question: Question, nonce: string, selected = new Set<string>(
 }
 
 function questionText(question: Question, heading: string): string {
+	const label = display(question.label, 1024);
+	const prompt = display(question.prompt, 2048);
+	const required = [label, prompt].filter(Boolean).join("\n\n");
 	const options = (question.options ?? [])
 		.map((option) => `${option.label}${option.description ? ` — ${option.description}` : ""}`)
 		.join("\n");
-	return display([heading, question.label, question.prompt, options].filter(Boolean).join("\n\n"));
+	const optional = display(
+		[heading, options].filter(Boolean).join("\n\n"),
+		MAX_TEXT - required.length - (required ? 2 : 0),
+	);
+	return [optional, required].filter(Boolean).join("\n\n");
 }
 
 export function forceReply(question: Question) {
@@ -122,19 +129,14 @@ async function updates(
 	)) as Update[];
 }
 
-async function clearKeyboard(
-	fetcher: Fetch,
-	config: TelegramConfig,
-	messageId: number | undefined,
-	signal?: AbortSignal,
-) {
+async function clearKeyboard(fetcher: Fetch, config: TelegramConfig, messageId: number | undefined) {
 	if (messageId === undefined) return;
 	await api(
 		fetcher,
 		config,
 		"editMessageReplyMarkup",
 		{ chat_id: config.chatId, message_id: messageId, reply_markup: {} },
-		signal,
+		AbortSignal.timeout(1500),
 	).catch(() => undefined);
 }
 
@@ -164,7 +166,7 @@ async function askOne(
 		},
 		signal,
 	)) as Message;
-	let replyMessageId = message.message_id;
+	let replyMessageId = question.type === "text" ? message.message_id : undefined;
 	let keyboardMessageId = message.message_id;
 	let callbackMessageId = message.message_id;
 	if (question.type === "text") {
@@ -183,88 +185,101 @@ async function askOne(
 		callbackMessageId = controls.message_id;
 	}
 	let nextOffset = offset;
-	const finish = async (value: unknown): Promise<Answer> => {
-		await clearKeyboard(fetcher, config, keyboardMessageId, signal);
-		return { value, offset: nextOffset };
-	};
+	const finish = (value: unknown): Answer => ({ value, offset: nextOffset });
 
-	while (!signal?.aborted) {
-		const batch = await updates(fetcher, config, nextOffset, signal);
-		for (const update of batch) {
-			if (typeof update.update_id === "number") nextOffset = Math.max(nextOffset, update.update_id + 1);
-			if (!authorized(update, config)) continue;
-			const callback = update.callback_query;
-			if (callback) {
-				const action = callback.data?.startsWith(`${nonce}:`) ? callback.data.slice(nonce.length + 1) : "";
-				if (callback.message?.message_id !== callbackMessageId || !action) {
+	try {
+		while (!signal?.aborted) {
+			const batch = await updates(fetcher, config, nextOffset, signal);
+			for (const update of batch) {
+				if (typeof update.update_id === "number") nextOffset = Math.max(nextOffset, update.update_id + 1);
+				if (!authorized(update, config)) continue;
+				const callback = update.callback_query;
+				if (callback) {
+					const action = callback.data?.startsWith(`${nonce}:`) ? callback.data.slice(nonce.length + 1) : "";
+					if (callback.message?.message_id !== callbackMessageId || !action) {
+						await api(
+							fetcher,
+							config,
+							"answerCallbackQuery",
+							{ callback_query_id: callback.id, text: "만료된 질문입니다." },
+							signal,
+						);
+						continue;
+					}
+					if (action === "done" && question.type === "checkbox" && question.required && selected.size === 0) {
+						await api(
+							fetcher,
+							config,
+							"answerCallbackQuery",
+							{ callback_query_id: callback.id, text: "하나 이상 선택해 주세요." },
+							signal,
+						);
+						continue;
+					}
+					await api(fetcher, config, "answerCallbackQuery", { callback_query_id: callback.id }, signal);
+					if (action === "cancel") return finish(undefined);
+					if (action === "skip") return finish(question.type === "checkbox" ? [] : "");
+					if (action === "default") return finish(stringDefault(question));
+					if (action === "done") return finish([...selected]);
+					if (action === "other") {
+						await clearKeyboard(fetcher, config, keyboardMessageId);
+						keyboardMessageId = undefined;
+						const custom = (await api(
+							fetcher,
+							config,
+							"sendMessage",
+							{
+								chat_id: config.chatId,
+								text: "기타 답변을 입력해 주세요.",
+								reply_markup: { force_reply: true },
+							},
+							signal,
+						)) as Message;
+						replyMessageId = custom.message_id;
+						callbackMessageId = undefined;
+						continue;
+					}
+					const match = /^o:(\d+)$/.exec(action);
+					const option = match ? question.options?.[Number(match[1])] : undefined;
+					if (!option) continue;
+					if (question.type !== "checkbox") return finish(option.value);
+					if (selected.has(option.value)) selected.delete(option.value);
+					else selected.add(option.value);
 					await api(
 						fetcher,
 						config,
-						"answerCallbackQuery",
-						{ callback_query_id: callback.id, text: "만료된 질문입니다." },
-						signal,
-					);
-					continue;
-				}
-				if (action === "done" && question.type === "checkbox" && question.required && selected.size === 0) {
-					await api(
-						fetcher,
-						config,
-						"answerCallbackQuery",
-						{ callback_query_id: callback.id, text: "하나 이상 선택해 주세요." },
-						signal,
-					);
-					continue;
-				}
-				await api(fetcher, config, "answerCallbackQuery", { callback_query_id: callback.id }, signal);
-				if (action === "cancel") return finish(undefined);
-				if (action === "skip") return finish(question.type === "checkbox" ? [] : "");
-				if (action === "default") return finish(stringDefault(question));
-				if (action === "done") return finish([...selected]);
-				if (action === "other") {
-					await clearKeyboard(fetcher, config, keyboardMessageId, signal);
-					const custom = (await api(
-						fetcher,
-						config,
-						"sendMessage",
+						"editMessageReplyMarkup",
 						{
 							chat_id: config.chatId,
-							text: "기타 답변을 입력해 주세요.",
-							reply_markup: { force_reply: true },
+							message_id: callbackMessageId,
+							reply_markup: keyboard(question, nonce, selected),
 						},
 						signal,
-					)) as Message;
-					replyMessageId = custom.message_id;
-					callbackMessageId = undefined;
+					);
 					continue;
 				}
-				const match = /^o:(\d+)$/.exec(action);
-				const option = match ? question.options?.[Number(match[1])] : undefined;
-				if (!option) continue;
-				if (question.type !== "checkbox") return finish(option.value);
-				if (selected.has(option.value)) selected.delete(option.value);
-				else selected.add(option.value);
-				await api(
-					fetcher,
-					config,
-					"editMessageReplyMarkup",
-					{
-						chat_id: config.chatId,
-						message_id: callbackMessageId,
-						reply_markup: keyboard(question, nonce, selected),
-					},
-					signal,
-				);
-				continue;
-			}
-			const incoming = update.message;
-			if (incoming?.text === "/cancel") return finish(undefined);
-			if (incoming && incoming.reply_to_message?.message_id === replyMessageId && typeof incoming.text === "string") {
-				return finish(question.type === "checkbox" ? [...selected, incoming.text] : incoming.text);
+				const incoming = update.message;
+				if (incoming?.text === "/cancel") return finish(undefined);
+				if (incoming && incoming.reply_to_message?.message_id === replyMessageId && typeof incoming.text === "string") {
+					const value = incoming.text.trim();
+					if (question.required && !value) {
+						await api(
+							fetcher,
+							config,
+							"sendMessage",
+							{ chat_id: config.chatId, text: "답변을 입력해 주세요." },
+							signal,
+						);
+						continue;
+					}
+					return finish(question.type === "checkbox" ? [...selected, value] : value);
+				}
 			}
 		}
+		return finish(undefined);
+	} finally {
+		await clearKeyboard(fetcher, config, keyboardMessageId);
 	}
-	return finish(undefined);
 }
 
 export async function askViaTelegram(
